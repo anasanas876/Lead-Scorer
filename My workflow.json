@@ -1,0 +1,188 @@
+{
+  "name": "My workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "jsCode": "// 1. Get raw data from the Webhook\nconst rawData = $json;\n\n// 2. Normalization Constants (Based on the X Education Dataset limits)\n// These ensure your numbers are scaled between 0 and 1\nconst MAX_VISITS = 40;            // Typical max visits in the dataset\nconst MAX_TIME = 2272;            // Max 'Total Time Spent on Website' in seconds\nconst MAX_PAGE_VIEWS = 20;        // Max 'Page Views Per Visit'\n\n// 3. One-Hot Encoding Logic for 'Lead Origin'\nlet origin_api = 0;\nlet origin_landing = 0;\n\nif (rawData['Lead Origin'] === 'API') {\n    origin_api = 1;\n} else if (rawData['Lead Origin'] === 'Landing Page Submission') {\n    origin_landing = 1;\n}\n\n// 4. Mathematical Scaling (Normalization)\n// Using Math.min to ensure values never exceed 1.0\nconst visits_scaled = Math.min(rawData['TotalVisits'] || 0, MAX_VISITS) / MAX_VISITS;\nconst time_scaled = Math.min(rawData['Total Time Spent on Website'] || 0, MAX_TIME) / MAX_TIME;\nconst views_scaled = Math.min(rawData['Page Views Per Visit'] || 0, MAX_PAGE_VIEWS) / MAX_PAGE_VIEWS;\n\n// 5. Return the clean feature vector for the ANN\nreturn {\n    visits_scaled,\n    time_scaled,\n    views_scaled,\n    origin_api,\n    origin_landing\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        208,
+        0
+      ],
+      "id": "fb91c3ec-4116-4e41-80d8-75847e57965a",
+      "name": "Pre-Processor Node"
+    },
+    {
+      "parameters": {
+        "jsCode": "// 1. The Trained Weights (W1: 5x4, W2: 4x1)\nconst W1 = [[0.004596620709605863, -0.008107305890232707, -0.01542705554080637, 0.015056886272161438], [0.0033899127605169, -0.15475254873098726, -0.20270892983812186, 0.0025471451677008903], [-0.006089275647701876, -0.014574659586168525, -0.07581137043076396, -0.004832634732022187], [-0.07694829655708747, -0.01913280244657798, -0.7635756972489905, -0.007760000900711198], [-0.010128311203344238, -0.30573506902271796, -0.9132357705374591, -0.014194275154171003]];\nconst B1 = [-0.07936791927274617, -0.42396941004248073, -1.6480266308228948, -0.008263743359254908];\nconst W2 = [[0.0009591913213831803], [0.4149784131879748], [-4.310222200226491], [-0.012271724755471817]];\nconst B2 = -40.30546827118063;\n\n// 2. Input Vector from the previous node (Pre-Processor)\n// Order: [TotalVisits, TimeSpent, PageViews, Origin_API, Origin_Landing]\nconst inputs = [\n  $node[\"Pre-Processor\"].json[\"visits_scaled\"],\n  $node[\"Pre-Processor\"].json[\"time_scaled\"],\n  $node[\"Pre-Processor\"].json[\"views_scaled\"],\n  $node[\"Pre-Processor\"].json[\"origin_api\"],\n  $node[\"Pre-Processor\"].json[\"origin_landing\"]\n];\n\n// 3. Mathematical Functions\nconst relu = (x) => Math.max(0, x);\nconst sigmoid = (x) => 1 / (1 + Math.exp(-x));\n\n// 4. Layer 1: Matrix Multiplication (Input * W1 + B1)\nlet hiddenLayer = B1.map((b, j) => {\n  let sum = b;\n  for (let i = 0; i < inputs.length; i++) {\n    sum += inputs[i] * W1[i][j];\n  }\n  return relu(sum);\n});\n\n// 5. Layer 2: Matrix Multiplication (Hidden * W2 + B2)\nlet finalSum = B2;\nfor (let i = 0; i < hiddenLayer.length; i++) {\n  finalSum += hiddenLayer[i] * W2[i][0];\n}\n\nconst probability = sigmoid(finalSum);\n\nreturn {\n  prediction_score: probability,\n  is_hot_lead: probability > 0.5 // Standard threshold\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        416,
+        0
+      ],
+      "id": "aa7c9b3e-567e-4465-a9bc-0e8849684546",
+      "name": "Custom ANN Model"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "4c956b58-d608-4770-9d1f-30a0ccb33c03",
+              "leftValue": "={{ prediction_score}}",
+              "rightValue": 0.5,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        624,
+        0
+      ],
+      "id": "af39f0d1-5ade-431d-af84-7d5233977aa8",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        832,
+        -128
+      ],
+      "id": "6d81b724-2ce5-4880-868e-753f6450b42c",
+      "name": "Send a message",
+      "webhookId": "d65999ec-c881-4ee5-9ed5-5533ceb5c8af",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "hJilPr9z7DnLyklQ",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "list",
+          "value": ""
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": ""
+        }
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        832,
+        192
+      ],
+      "id": "e86d3b92-5cce-4781-bcd4-64726f22550a",
+      "name": "Append row in sheet"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "5435cf5b-9961-4a58-b4fc-a97873dca1ac",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -64,
+        0
+      ],
+      "id": "7590e8b9-b895-440f-809f-d1fb48046fdf",
+      "name": "Webhook",
+      "webhookId": "5435cf5b-9961-4a58-b4fc-a97873dca1ac"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Pre-Processor Node": {
+      "main": [
+        [
+          {
+            "node": "Custom ANN Model",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Custom ANN Model": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Send a message",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Append row in sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Pre-Processor Node",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "e72ef9ee-b97a-4420-b3ae-696553806e8f",
+  "meta": {
+    "instanceId": "cc1b073a3c5636ffa54df066906212b1efbcecd41a3bd2d847ef38b1af054ca4"
+  },
+  "id": "KeYRYUIxxHRK0q7A",
+  "tags": []
+}
